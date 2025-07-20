@@ -1,51 +1,57 @@
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+import requests
+import time
 
-TOKEN = "8120876505:AAG1OJbhN0c6JXlWJSEZwIJRoP_gl32K92k"
+# === بيانات الحساب الحقيقي ===
+USERNAME = input("اسم مستخدم انستغرام: ")
+PASSWORD = input("كلمة السر: ")
 
-ASK_USERNAME, ASK_REASON, ASK_COUNT = range(3)
+# === بيانات الحساب المستهدف ===
+TARGET_USER_ID = input("user_id الحساب المستهدف (مثلاً 123456789): ")
+REASON_ID = input("رقم نوع البلاغ (مثلاً 1=تحرش، 2=انتحال...): ")
+REPORT_COUNT = int(input("كم عدد البلاغات اللي تريد ترسلها؟ "))
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("أرسل اسم المستخدم المستهدف (إنستغرام):")
-    return ASK_USERNAME
+# === إعدادات الاتصال ===
+session = requests.Session()
+login_url = "https://www.instagram.com/accounts/login/ajax/"
 
-async def ask_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['username'] = update.message.text
-    await update.message.reply_text("حدد نوع البلاغ:\n1- تحرش\n2- ابتزاز\n3- عنف")
-    return ASK_REASON
+headers = {
+    "User-Agent": "Mozilla/5.0",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": "https://www.instagram.com/accounts/login/",
+}
 
-async def ask_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reasons = {'1': 'تحرش', '2': 'ابتزاز', '3': 'عنف'}
-    user_reason = update.message.text.strip()
-    context.user_data['reason'] = reasons.get(user_reason, 'غير معروف')
-    await update.message.reply_text("كم عدد البلاغات التي تريد تنفيذها؟ (رقم)")
-    return ASK_COUNT
+# 1. جلب csrf token
+r = session.get("https://www.instagram.com/accounts/login/", headers=headers)
+csrf = r.cookies.get("csrftoken")
+headers["X-CSRFToken"] = csrf
 
-async def report_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    username = context.user_data['username']
-    reason = context.user_data['reason']
-    count = update.message.text.strip()
-    msg = f"✅ تم تسجيل {count} بلاغ على @{username} بسبب: {reason}!"
-    await update.message.reply_text(msg)
-    # سجل البلاغ في ملف نصي
-    with open("bot_reports.txt", "a", encoding="utf-8") as f:
-        f.write(f"{username} - {reason} - {count} @ {update.effective_user.username}\n")
-    return ConversationHandler.END
+# 2. تسجيل الدخول
+login_data = {
+    "username": USERNAME,
+    "enc_password": f"#PWD_INSTAGRAM_BROWSER:0:0:{PASSWORD}",
+    "queryParams": {},
+    "optIntoOneTap": "false"
+}
+resp = session.post(login_url, data=login_data, headers=headers, allow_redirects=True)
+print("نتيجة تسجيل الدخول:", resp.text)
+if not resp.json().get("authenticated"):
+    print("❌ فشل تسجيل الدخول! راجع البيانات أو حاول من متصفح آخر.")
+    exit()
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("تم إلغاء العملية.")
-    return ConversationHandler.END
+print("✅ تم تسجيل الدخول بنجاح، البدء في إرسال البلاغات...")
 
-if __name__ == '__main__':
-    app = Application.builder().token(TOKEN).build()
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            ASK_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_reason)],
-            ASK_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_count)],
-            ASK_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_done)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(conv_handler)
-    app.run_polling()
+# 3. إرسال البلاغات
+report_url = f"https://www.instagram.com/users/{TARGET_USER_ID}/report/"
+report_data = {
+    "reason_id": REASON_ID,
+    "source_name": "profile",
+    "surface": "profile",
+}
+
+headers["X-CSRFToken"] = session.cookies.get("csrftoken")
+
+for i in range(REPORT_COUNT):
+    r = session.post(report_url, data=report_data, headers=headers)
+    print(f"بلاغ رقم {i+1}: الحالة {r.status_code}, الرد: {r.text}")
+    # انتظر ثانيتين بين كل بلاغ حتى لا يتحظر الحساب بسرعة
+    time.sleep(2)
